@@ -1,0 +1,136 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Clinic Appointment Scheduler</title>
+<style>
+  body { font-family: Arial, sans-serif; max-width: 700px; margin: 40px auto; padding: 0 20px; background: #f7f9fb; }
+  h1 { color: #1b3a57; }
+  h2 { color: #1b3a57; margin-top: 30px; }
+  .card { background: white; padding: 20px; border-radius: 10px; box-shadow: 0 1px 4px rgba(0,0,0,0.1); margin-bottom: 20px; }
+  input, select { display: block; width: 100%; padding: 8px; margin: 6px 0; box-sizing: border-box; border: 1px solid #ccc; border-radius: 5px; }
+  button { padding: 8px 14px; margin: 6px 6px 0 0; border: none; border-radius: 5px; background: #2b6cb0; color: white; cursor: pointer; }
+  button:hover { background: #1e4e8c; }
+  button.danger { background: #c0392b; }
+  button.danger:hover { background: #922b21; }
+  .appt { border-bottom: 1px solid #eee; padding: 8px 0; }
+  .msg { padding: 8px; border-radius: 5px; margin-top: 8px; }
+  .msg.ok { background: #e6f4ea; color: #1e7a34; }
+  .msg.err { background: #fdecea; color: #b3261e; }
+  .session-block { margin-top: 10px; }
+</style>
+</head>
+<body>
+
+<h1>Clinic Appointment Scheduler</h1>
+
+<div class="card">
+  <h2>Add Appointment</h2>
+  <input id="id" placeholder="Appointment ID">
+  <input id="name" placeholder="Patient Name">
+  <input id="doctor" placeholder="Doctor Name">
+  <input id="date" type="date">
+  <input id="time" type="time">
+  <select id="session">
+    <option value="morning">Morning</option>
+    <option value="evening">Evening</option>
+  </select>
+  <button onclick="addAppointment()">Add Appointment</button>
+  <div id="addMsg"></div>
+</div>
+
+<div class="card">
+  <h2>Search / Delete by Appointment ID</h2>
+  <input id="searchId" placeholder="Appointment ID">
+  <button onclick="searchAppointment()">Search</button>
+  <button class="danger" onclick="deleteAppointment()">Delete</button>
+  <div id="searchResult"></div>
+</div>
+
+<div class="card">
+  <h2>All Appointments</h2>
+  <button onclick="loadAppointments()">Refresh</button>
+  <div class="session-block">
+    <h3>Morning</h3>
+    <div id="morningList"></div>
+  </div>
+  <div class="session-block">
+    <h3>Evening</h3>
+    <div id="eveningList"></div>
+  </div>
+</div>
+
+<script>
+  const API = "http://localhost:5000/appointments";
+
+  function apptLine(a) {
+    return `<div class="appt">
+      <strong>${a.appointment_id}</strong> — ${a.patient_name}<br>
+      Doctor: ${a.doctor_name} | ${a.date} at ${a.time}
+    </div>`;
+  }
+
+  function showMsg(elId, text, ok) {
+    document.getElementById(elId).innerHTML =
+      `<div class="msg ${ok ? "ok" : "err"}">${text}</div>`;
+  }
+
+  async function addAppointment() {
+    const data = {
+      appointment_id: document.getElementById("id").value.trim(),
+      patient_name: document.getElementById("name").value.trim(),
+      doctor_name: document.getElementById("doctor").value.trim(),
+      date: document.getElementById("date").value,
+      time: document.getElementById("time").value,
+      session: document.getElementById("session").value
+    };
+
+    const res = await fetch(API, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(data)
+    });
+    const result = await res.json();
+
+    showMsg("addMsg", result.message, res.ok);
+    if (res.ok) {
+      ["id", "name", "doctor", "date", "time"].forEach(f => document.getElementById(f).value = "");
+      loadAppointments();
+    }
+  }
+
+  async function searchAppointment() {
+    const id = document.getElementById("searchId").value.trim();
+    if (!id) return;
+    const res = await fetch(`${API}/${encodeURIComponent(id)}`);
+    const result = await res.json();
+
+    if (res.ok) {
+      document.getElementById("searchResult").innerHTML = apptLine(result);
+    } else {
+      showMsg("searchResult", result.message, false);
+    }
+  }
+
+  async function deleteAppointment() {
+    const id = document.getElementById("searchId").value.trim();
+    if (!id) return;
+    const res = await fetch(`${API}/${encodeURIComponent(id)}`, { method: "DELETE" });
+    const result = await res.json();
+    showMsg("searchResult", result.message, res.ok);
+    if (res.ok) loadAppointments();
+  }
+
+  async function loadAppointments() {
+    const res = await fetch(API);
+    const data = await res.json();
+
+    document.getElementById("morningList").innerHTML =
+      data.morning.length ? data.morning.map(apptLine).join("") : "<p>No morning appointments.</p>";
+
+    document.getElementById("eveningList").innerHTML =
+      data.evening.length ? data.evening.map(apptLine).join("") : "<p>No evening appointments.</p>";
+  }
+
+  loadAppointments();
+</script>

@@ -1,349 +1,345 @@
-import { useState, useEffect } from "react";
-import "./App.css";
+const { useState, useEffect, useCallback } = React;
 
-const API = "http://localhost:5000/appointments";
+// Point this at wherever the Flask API is running.
+const API_BASE = "http://127.0.0.1:5000";
 
-function CheckIcon() {
-  return (
-    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round">
-      <path d="M20 6 9 17l-5-5" />
-    </svg>
-  );
-}
-function XIcon() {
-  return (
-    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round">
-      <path d="M18 6 6 18M6 6l12 12" />
-    </svg>
-  );
-}
-function RefreshIcon() {
-  return (
-    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round">
-      <path d="M3 12a9 9 0 1 1 3 6.7" />
-      <path d="M3 21v-6h6" />
-    </svg>
-  );
-}
-function EmptyIcon() {
-  return (
-    <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6">
-      <rect x="3" y="5" width="18" height="16" rx="2" />
-      <path d="M8 3v4M16 3v4M3 10h18" />
-    </svg>
-  );
+function formatDate(dateStr) {
+  if (!dateStr) return "";
+  const d = new Date(dateStr + "T00:00:00");
+  if (isNaN(d.getTime())) return dateStr;
+  return d.toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" });
 }
 
-function Ticket({ a, session }) {
-  return (
-    <div className={`ticket ${session}`}>
-      <div className="ticket-tab" />
-      <div className="ticket-body">
-        <div className="ticket-id">{a.appointment_id}</div>
-        <div className="ticket-name">{a.patient_name}</div>
-        <div className="ticket-meta">
-          Dr. {a.doctor_name} · {a.date} · <span className="ticket-time">{a.time}</span>
-        </div>
-      </div>
-    </div>
-  );
+function formatTime(timeStr) {
+  if (!timeStr) return "";
+  const [h, m] = timeStr.split(":");
+  if (h === undefined) return timeStr;
+  const hour = parseInt(h, 10);
+  const period = hour >= 12 ? "PM" : "AM";
+  const hour12 = hour % 12 === 0 ? 12 : hour % 12;
+  return `${hour12}:${m ?? "00"} ${period}`;
 }
 
-function EmptyState({ text }) {
-  return (
-    <div className="empty-state">
-      <EmptyIcon />
-      <div>{text}</div>
-    </div>
-  );
-}
-
-function Msg({ ok, text }) {
-  return (
-    <div className={`msg ${ok ? "ok" : "err"}`}>
-      {ok ? <CheckIcon /> : <XIcon />}
-      {text}
-    </div>
-  );
-}
-
-function useClock() {
-  const [now, setNow] = useState(new Date());
-  useEffect(() => {
-    const id = setInterval(() => setNow(new Date()), 30000);
-    return () => clearInterval(id);
-  }, []);
-  return now.toLocaleString([], {
-    weekday: "short",
-    month: "short",
-    day: "numeric",
-    hour: "2-digit",
-    minute: "2-digit",
-  });
-}
-
-export default function App() {
-  const clock = useClock();
-
-  const [form, setForm] = useState({
+function emptyForm() {
+  return {
     appointment_id: "",
     patient_name: "",
     doctor_name: "",
     date: "",
     time: "",
     session: "morning",
-  });
-  const [addMsg, setAddMsg] = useState(null);
+  };
+}
 
-  const [searchId, setSearchId] = useState("");
-  const [searchResult, setSearchResult] = useState(null);
-  const [searchMsg, setSearchMsg] = useState(null);
+function AppointmentCard({ appt, onDelete }) {
+  return (
+    <div className="appt-card">
+      <div className="tab" />
+      <div className="body">
+        <div className="top-row">
+          <span className="patient">{appt.patient_name}</span>
+          <span className="time">{formatTime(appt.time)}</span>
+        </div>
+        <div className="meta">
+          <span className="id-tag">#{appt.appointment_id}</span>
+          Dr. {appt.doctor_name} · {formatDate(appt.date)}
+        </div>
+        <div className="bottom-row">
+          <span />
+          <button className="btn btn-danger-outline" onClick={() => onDelete(appt.appointment_id)}>
+            Remove
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
 
+function Round({ session, title, appointments, onDelete }) {
+  return (
+    <div className={`round ${session}`}>
+      <div className="round-header">
+        <span className="dot" />
+        <h2>{title}</h2>
+        <span className="count">{appointments.length} booked</span>
+      </div>
+      <div className="card-list">
+        {appointments.length === 0 && (
+          <div className="empty-state">No {session} appointments yet.</div>
+        )}
+        {appointments.map((a) => (
+          <AppointmentCard key={a.appointment_id} appt={a} onDelete={onDelete} />
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function App() {
   const [morning, setMorning] = useState([]);
   const [evening, setEvening] = useState([]);
-  const [loadError, setLoadError] = useState(false);
+  const [showForm, setShowForm] = useState(false);
+  const [form, setForm] = useState(emptyForm());
+  const [formError, setFormError] = useState("");
+  const [search, setSearch] = useState("");
+  const [searchResult, setSearchResult] = useState(null);
+  const [searchError, setSearchError] = useState("");
+  const [banner, setBanner] = useState(null); // { text, error }
+  const [offline, setOffline] = useState(false);
 
-  async function loadAppointments() {
+  const showBanner = (text, error = false) => {
+    setBanner({ text, error });
+    setTimeout(() => setBanner(null), 2600);
+  };
+
+  const loadAppointments = useCallback(async () => {
     try {
-      const res = await fetch(API);
+      const res = await fetch(`${API_BASE}/appointments`);
+      if (!res.ok) throw new Error("bad response");
       const data = await res.json();
-      setMorning(data.morning);
-      setEvening(data.evening);
-      setLoadError(false);
-    } catch (e) {
-      setLoadError(true);
+      setMorning(data.morning || []);
+      setEvening(data.evening || []);
+      setOffline(false);
+    } catch (err) {
+      setOffline(true);
     }
-  }
+  }, []);
 
   useEffect(() => {
     loadAppointments();
-  }, []);
+  }, [loadAppointments]);
 
-  function handleChange(e) {
-    setForm({ ...form, [e.target.name]: e.target.value });
-  }
+  const handleFieldChange = (field) => (e) => {
+    setForm((f) => ({ ...f, [field]: e.target.value }));
+  };
 
-  async function addAppointment() {
+  const handleSessionPick = (session) => {
+    setForm((f) => ({ ...f, session }));
+  };
+
+  const resetForm = () => {
+    setForm(emptyForm());
+    setFormError("");
+  };
+
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    setFormError("");
+
+    const required = ["appointment_id", "patient_name", "doctor_name", "date", "time"];
+    const missing = required.filter((f) => !form[f].trim());
+    if (missing.length) {
+      setFormError(`Please fill in: ${missing.join(", ").replace(/_/g, " ")}`);
+      return;
+    }
+
     try {
-      const res = await fetch(API, {
+      const res = await fetch(`${API_BASE}/appointments`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(form),
       });
-      const result = await res.json();
-      setAddMsg({ text: result.message, ok: res.ok });
-
-      if (res.ok) {
-        setForm({
-          appointment_id: "",
-          patient_name: "",
-          doctor_name: "",
-          date: "",
-          time: "",
-          session: "morning",
-        });
-        loadAppointments();
+      const data = await res.json();
+      if (!res.ok) {
+        setFormError(data.message || "Could not add appointment");
+        return;
       }
-    } catch (e) {
-      setAddMsg({ text: "Couldn't reach the server. Is the API running?", ok: false });
+      showBanner(`Added ${form.patient_name}'s appointment`);
+      resetForm();
+      setShowForm(false);
+      loadAppointments();
+    } catch (err) {
+      setFormError("Couldn't reach the server. Is the Flask app running?");
     }
-  }
+  };
 
-  async function searchAppointment() {
-    if (!searchId.trim()) return;
+  const handleDelete = async (id) => {
     try {
-      const res = await fetch(`${API}/${encodeURIComponent(searchId.trim())}`);
-      const result = await res.json();
-      if (res.ok) {
-        setSearchResult(result);
-        setSearchMsg(null);
-      } else {
-        setSearchResult(null);
-        setSearchMsg({ text: result.message, ok: false });
+      const res = await fetch(`${API_BASE}/appointments/${id}`, { method: "DELETE" });
+      if (!res.ok) {
+        showBanner("Could not delete appointment", true);
+        return;
       }
-    } catch (e) {
-      setSearchResult(null);
-      setSearchMsg({ text: "Couldn't reach the server. Is the API running?", ok: false });
+      showBanner("Appointment removed");
+      if (searchResult && searchResult.appointment_id === id) setSearchResult(null);
+      loadAppointments();
+    } catch (err) {
+      showBanner("Couldn't reach the server", true);
     }
-  }
+  };
 
-  async function deleteAppointment() {
-    if (!searchId.trim()) return;
+  const handleSearch = async (e) => {
+    e.preventDefault();
+    setSearchError("");
+    setSearchResult(null);
+    if (!search.trim()) return;
     try {
-      const res = await fetch(`${API}/${encodeURIComponent(searchId.trim())}`, {
-        method: "DELETE",
-      });
-      const result = await res.json();
-      setSearchMsg({ text: result.message, ok: res.ok });
-      setSearchResult(null);
-      if (res.ok) loadAppointments();
-    } catch (e) {
-      setSearchMsg({ text: "Couldn't reach the server. Is the API running?", ok: false });
+      const res = await fetch(`${API_BASE}/appointments/${encodeURIComponent(search.trim())}`);
+      if (res.status === 404) {
+        setSearchError(`No appointment found with ID "${search.trim()}"`);
+        return;
+      }
+      const data = await res.json();
+      setSearchResult(data);
+    } catch (err) {
+      setSearchError("Couldn't reach the server. Is the Flask app running?");
     }
-  }
+  };
+
+  const clearSearch = () => {
+    setSearch("");
+    setSearchResult(null);
+    setSearchError("");
+  };
 
   return (
-    <div className="app-root">
-      <div className="topbar">
-        <div className="topbar-inner">
-          <div className="brand-mark">
-            <svg width="40" height="40" viewBox="0 0 40 40" fill="none">
-              <circle cx="20" cy="20" r="19" stroke="#e2a53d" strokeWidth="1.5" opacity="0.6" />
-              <path d="M20 10v20M10 20h20" stroke="#f2f7f5" strokeWidth="2.2" strokeLinecap="round" />
-              <circle cx="20" cy="20" r="4.5" fill="#e2a53d" />
-            </svg>
-            <div>
-              <h1>Meridian Clinic</h1>
-              <div className="tagline">Appointment Scheduler</div>
-            </div>
+    <div className="app">
+      <header className="app-header">
+        <div className="brand-mark">
+          <span className="glyph" aria-hidden="true" />
+          <div>
+            <h1>Appointment Ledger</h1>
+            <p className="tagline">One book, two rounds: morning and evening.</p>
           </div>
-          <div className="clock">{clock}</div>
         </div>
+        <div className="header-stats">
+          <div className="stat morning">
+            <span className="num">{morning.length}</span>
+            <span className="label">Morning</span>
+          </div>
+          <div className="stat evening">
+            <span className="num">{evening.length}</span>
+            <span className="label">Evening</span>
+          </div>
+        </div>
+      </header>
+
+      {offline && (
+        <p className="offline-note">
+          Can't reach the API at {API_BASE}. Start the Flask server (python app.py) and refresh.
+        </p>
+      )}
+
+      <div className="toolbar">
+        <form className="search-box" onSubmit={handleSearch}>
+          <input
+            type="text"
+            placeholder="Find an appointment by ID…"
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+          />
+          {search && (
+            <button type="button" className="clear-btn" onClick={clearSearch}>
+              ✕
+            </button>
+          )}
+        </form>
+        <button className="btn btn-ghost" onClick={handleSearch}>
+          Search
+        </button>
+        <button
+          className="btn btn-primary"
+          onClick={() => {
+            setShowForm((s) => !s);
+            setFormError("");
+          }}
+        >
+          {showForm ? "Cancel" : "+ New appointment"}
+        </button>
       </div>
 
-      <main>
-        <div className="grid-two">
-          <div className="card">
-            <div className="card-eyebrow">New booking</div>
-            <h2>Add Appointment</h2>
+      {searchError && <p className="form-error" style={{ marginBottom: 16 }}>{searchError}</p>}
 
-            <label htmlFor="appointment_id">Appointment ID</label>
-            <input
-              id="appointment_id"
-              name="appointment_id"
-              placeholder="e.g. APT-1042"
-              value={form.appointment_id}
-              onChange={handleChange}
-            />
-
-            <label htmlFor="patient_name">Patient Name</label>
-            <input
-              id="patient_name"
-              name="patient_name"
-              placeholder="Full name"
-              value={form.patient_name}
-              onChange={handleChange}
-            />
-
-            <label htmlFor="doctor_name">Doctor Name</label>
-            <input
-              id="doctor_name"
-              name="doctor_name"
-              placeholder="Attending doctor"
-              value={form.doctor_name}
-              onChange={handleChange}
-            />
-
-            <div className="row-2">
-              <div>
-                <label htmlFor="date">Date</label>
-                <input id="date" type="date" name="date" value={form.date} onChange={handleChange} />
-              </div>
-              <div>
-                <label htmlFor="time">Time</label>
-                <input id="time" type="time" name="time" value={form.time} onChange={handleChange} />
-              </div>
-            </div>
-
-            <label htmlFor="session">Session</label>
-            <select id="session" name="session" value={form.session} onChange={handleChange}>
-              <option value="morning">Morning</option>
-              <option value="evening">Evening</option>
-            </select>
-
-            <div className="btn-row">
-              <button className="btn-primary" onClick={addAppointment}>
-                Add appointment
-              </button>
-            </div>
-            {addMsg && (
-              <div className="result-slot">
-                <Msg ok={addMsg.ok} text={addMsg.text} />
-              </div>
-            )}
-          </div>
-
-          <div className="card">
-            <div className="card-eyebrow">Lookup</div>
-            <h2>Find or Cancel</h2>
-            <label htmlFor="searchId">Appointment ID</label>
-            <input
-              id="searchId"
-              placeholder="e.g. APT-1042"
-              value={searchId}
-              onChange={(e) => setSearchId(e.target.value)}
-            />
-
-            <div className="btn-row">
-              <button className="btn-ghost" onClick={searchAppointment}>
-                Search
-              </button>
-              <button className="btn-danger" onClick={deleteAppointment}>
-                Cancel appointment
-              </button>
-            </div>
-
-            {searchResult && (
-              <div className="result-slot">
-                <Ticket a={searchResult} session={searchResult.session || "morning"} />
-              </div>
-            )}
-            {searchMsg && (
-              <div className="result-slot">
-                <Msg ok={searchMsg.ok} text={searchMsg.text} />
-              </div>
-            )}
-          </div>
+      {searchResult && (
+        <div className="entry-form" style={{ marginBottom: 20 }}>
+          <h2>Search result</h2>
+          <AppointmentCard appt={searchResult} onDelete={handleDelete} />
         </div>
+      )}
 
-        <div className="card schedule-card">
-          <div className="schedule-head">
-            <div>
-              <h2>Today's Schedule</h2>
-              <div className="schedule-sub">Booked appointments, morning through evening</div>
+      {showForm && (
+        <form className="entry-form" onSubmit={handleSubmit}>
+          <h2>New appointment</h2>
+          <div className="form-grid">
+            <div className="field">
+              <label htmlFor="appointment_id">Appointment ID</label>
+              <input
+                id="appointment_id"
+                type="text"
+                value={form.appointment_id}
+                onChange={handleFieldChange("appointment_id")}
+                placeholder="e.g. A-1042"
+              />
             </div>
-            <button className="refresh-btn" onClick={loadAppointments}>
-              <RefreshIcon />
-              Refresh
+            <div className="field">
+              <label htmlFor="patient_name">Patient name</label>
+              <input
+                id="patient_name"
+                type="text"
+                value={form.patient_name}
+                onChange={handleFieldChange("patient_name")}
+                placeholder="e.g. Asha Patil"
+              />
+            </div>
+            <div className="field">
+              <label htmlFor="doctor_name">Doctor</label>
+              <input
+                id="doctor_name"
+                type="text"
+                value={form.doctor_name}
+                onChange={handleFieldChange("doctor_name")}
+                placeholder="e.g. Rao"
+              />
+            </div>
+            <div className="field">
+              <label htmlFor="date">Date</label>
+              <input id="date" type="date" value={form.date} onChange={handleFieldChange("date")} />
+            </div>
+            <div className="field">
+              <label htmlFor="time">Time</label>
+              <input id="time" type="time" value={form.time} onChange={handleFieldChange("time")} />
+            </div>
+            <div className="field">
+              <label>Round</label>
+              <div className="session-toggle">
+                <button
+                  type="button"
+                  className={`morning ${form.session === "morning" ? "active" : ""}`}
+                  onClick={() => handleSessionPick("morning")}
+                >
+                  ☀ Morning
+                </button>
+                <button
+                  type="button"
+                  className={`evening ${form.session === "evening" ? "active" : ""}`}
+                  onClick={() => handleSessionPick("evening")}
+                >
+                  ☾ Evening
+                </button>
+              </div>
+            </div>
+          </div>
+          {formError && <p className="form-error">{formError}</p>}
+          <div className="form-actions">
+            <button type="button" className="btn btn-ghost" onClick={resetForm}>
+              Clear
+            </button>
+            <button type="submit" className="btn btn-primary">
+              Save appointment
             </button>
           </div>
+        </form>
+      )}
 
-          <div className="horizon">
-            <div className="horizon-labels">
-              <span className="am">☼ Morning</span>
-              <span className="pm">☾ Evening</span>
-            </div>
-            <div className="horizon-dot" />
-          </div>
+      <div className="ledger">
+        <Round session="morning" title="Morning Round" appointments={morning} onDelete={handleDelete} />
+        <div className="spine" aria-hidden="true" />
+        <Round session="evening" title="Evening Round" appointments={evening} onDelete={handleDelete} />
+      </div>
 
-          <div className="session-columns">
-            <div className="session-col morning">
-              <div className="session-title morning">
-                Morning <span className="session-count">{morning.length}</span>
-              </div>
-              {loadError ? (
-                <EmptyState text="Can't load the schedule right now." />
-              ) : morning.length ? (
-                morning.map((a) => <Ticket key={a.appointment_id} a={a} session="morning" />)
-              ) : (
-                <EmptyState text="No morning appointments yet." />
-              )}
-            </div>
-            <div className="session-col evening">
-              <div className="session-title evening">
-                Evening <span className="session-count">{evening.length}</span>
-              </div>
-              {loadError ? (
-                <EmptyState text="Can't load the schedule right now." />
-              ) : evening.length ? (
-                evening.map((a) => <Ticket key={a.appointment_id} a={a} session="evening" />)
-              ) : (
-                <EmptyState text="No evening appointments yet." />
-              )}
-            </div>
-          </div>
-        </div>
-      </main>
+      {banner && <div className={`banner ${banner.error ? "error" : ""}`}>{banner.text}</div>}
     </div>
   );
 }
+
+ReactDOM.createRoot(document.getElementById("root")).render(<App />);
